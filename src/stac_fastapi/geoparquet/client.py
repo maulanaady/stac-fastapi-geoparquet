@@ -213,6 +213,28 @@ class Client(BaseCoreClient):
                 )
             else:
                 raise HTTPException(400, f"unexpected fields type: {fields}")
+        if (flt := search_dict.get("filter")) is not None:
+            # rustac's DuckdbClient.search evaluates the CQL2 filter over the
+            # projected struct, so any filter column missing from `include`
+            # yields NULL and silently drops every row. Merge filter-referenced
+            # properties into `include`; projection is response-shaping only.
+            if isinstance(flt, str):
+                # cql2-text: can't extract properties without a parser; drop the
+                # projection instead (include=[] = all fields).
+                search_dict["include"] = []
+            else:
+                props = set(search_dict.get("include") or [])
+                stack: list[Any] = [flt]
+                while stack:
+                    node = stack.pop()
+                    if isinstance(node, dict):
+                        if isinstance(node.get("property"), str):
+                            props.add(node["property"])
+                        else:
+                            stack.extend(node.values())
+                    elif isinstance(node, list):
+                        stack.extend(node)
+                search_dict["include"] = list(props)
         if sortby := search_dict.pop("sortby", None):
             search_dict["sortby"] = sortby
 
